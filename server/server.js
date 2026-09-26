@@ -232,7 +232,7 @@ io.on('connection', (socket) => {
   socket.on('chat-message', (msg) => {
     const u = connected[socket.id];
     if (!u || !u.serverId) return;
-    io.to(roomKey(u.serverId, u.channelId)).emit('chat-message', { pseudo: u.pseudo, msg });
+    io.to(roomKey(u.serverId, u.channelId)).emit('chat-message', { pseudo: u.pseudo, msg, avatar: users[u.pseudo]?.avatar || null });
   });
 
   // --- Appel de groupe (mesh WebRTC) dans le salon courant ---
@@ -278,7 +278,7 @@ io.on('connection', (socket) => {
     if (dmsData[key].length > 200) dmsData[key] = dmsData[key].slice(-200);
     saveJSON(DMS_FILE, dmsData);
     const targetId = pseudoToSocket[toPseudo];
-    if (targetId) io.to(targetId).emit('dm-message', entry);
+    if (targetId) io.to(targetId).emit('dm-message', { ...entry, avatar: users[u.pseudo]?.avatar || null });
     cb && cb({ ok: true });
   });
 
@@ -286,7 +286,8 @@ io.on('connection', (socket) => {
     const u = connected[socket.id];
     if (!u) return cb([]);
     const key = dmKey(u.pseudo, withPseudo);
-    cb(dmsData[key] || []);
+    const history = (dmsData[key] || []).map((m) => ({ ...m, avatar: users[m.from]?.avatar || null }));
+    cb(history);
   });
 
   // --- Appel direct à un contact (par pseudo), indépendant des salons ---
@@ -322,3 +323,4 @@ io.on('connection', (socket) => {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => console.log(`Serveur lancé sur le port ${PORT}`));
+    
