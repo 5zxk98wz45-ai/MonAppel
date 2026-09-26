@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>MonDiscord</title>
+<title>MonAppel</title>
 <style>
   * { box-sizing: border-box; font-family: -apple-system, system-ui, sans-serif; }
   html, body { margin: 0; height: 100%; background: #1e1f22; color: #dbdee1; overflow: hidden; }
@@ -354,6 +354,7 @@
         return;
       }
       myPseudo = pseudo;
+      localStorage.setItem('mondiscord-session', JSON.stringify({ pseudo, password }));
       authScreen.classList.add('hidden');
       app.classList.remove('hidden');
       myAccountName.textContent = myPseudo;
@@ -361,6 +362,26 @@
     });
   };
   passwordInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') authSubmitBtn.click(); });
+
+  // --- Reconnexion automatique si une session est enregistrée sur cet appareil ---
+  function tryAutoLogin() {
+    let saved;
+    try { saved = JSON.parse(localStorage.getItem('mondiscord-session') || 'null'); } catch { saved = null; }
+    if (!saved || !saved.pseudo || !saved.password) return;
+    authScreen.classList.add('hidden'); // évite le flash de l'écran de connexion
+    socket.emit('login', saved, (res) => {
+      if (res.ok) {
+        myPseudo = saved.pseudo;
+        app.classList.remove('hidden');
+        myAccountName.textContent = myPseudo;
+        socket.emit('join', myPseudo);
+      } else {
+        localStorage.removeItem('mondiscord-session');
+        authScreen.classList.remove('hidden');
+      }
+    });
+  }
+  socket.on('connect', () => { if (!myPseudo) tryAutoLogin(); });
 
   socket.on('profile', ({ avatar }) => {
     myAvatar = avatar;
@@ -429,6 +450,7 @@
             <button class="modal-cancel" id="profile-close">Fermer</button>
             <button class="modal-confirm" id="profile-save">Enregistrer</button>
           </div>
+          <button id="logout-btn" style="width:100%;margin-top:8px;background:#da373c;color:white;border:none;border-radius:6px;padding:9px;cursor:pointer;">Se déconnecter</button>
         </div>
       </div>`;
     const preview = document.getElementById('profile-preview');
@@ -458,6 +480,10 @@
       reader.readAsDataURL(file);
     };
     document.getElementById('profile-close').onclick = () => modalRoot.innerHTML = '';
+    document.getElementById('logout-btn').onclick = () => {
+      localStorage.removeItem('mondiscord-session');
+      location.reload();
+    };
     document.getElementById('profile-save').onclick = () => {
       socket.emit('update-avatar', newAvatarData, (res) => {
         if (res.ok) {
@@ -618,10 +644,14 @@
   });
 
   // --- Chat (salon ou DM selon activeContext) ---
-  function appendChatBubble(pseudo, msg) {
+  function appendChatBubble(pseudo, msg, avatarUrl) {
     const div = document.createElement('div');
     div.className = 'msg';
-    div.appendChild(avatarEl(pseudo));
+    const av = document.createElement('div');
+    av.className = 'avatar';
+    if (avatarUrl) { av.style.backgroundImage = `url(${avatarUrl})`; }
+    else { av.style.background = colorFor(pseudo); av.textContent = pseudo.slice(0, 2).toUpperCase(); }
+    div.appendChild(av);
     const content = document.createElement('div');
     content.className = 'content';
     const p = document.createElement('span'); p.className = 'pseudo'; p.textContent = pseudo;
@@ -639,18 +669,18 @@
     if (activeContext.type === 'channel') {
       socket.emit('chat-message', msg);
     } else if (activeContext.type === 'dm') {
-      appendChatBubble(myPseudo, msg);
+      appendChatBubble(myPseudo, msg, myAvatar);
       socket.emit('send-dm', { toPseudo: activeContext.id, msg }, (res) => {
         if (!res.ok) showMessage(res.error || 'Message non envoyé.', 'error-msg');
       });
     }
     chatInput.value = '';
   };
-  socket.on('chat-message', ({ pseudo, msg }) => appendChatBubble(pseudo, msg));
+  socket.on('chat-message', ({ pseudo, msg, avatar }) => appendChatBubble(pseudo, msg, avatar));
 
-  socket.on('dm-message', ({ from, msg }) => {
+  socket.on('dm-message', ({ from, msg, avatar }) => {
     if (activeContext && activeContext.type === 'dm' && activeContext.id === from) {
-      appendChatBubble(from, msg);
+      appendChatBubble(from, msg, avatar);
     } else {
       showMessage(`Nouveau message de ${from}.`, 'system-msg');
     }
@@ -671,7 +701,7 @@
     showChannelUI();
     joinCallBtn.classList.add('hidden');
     socket.emit('get-dm-history', pseudo, (history) => {
-      (history || []).forEach((m) => appendChatBubble(m.from, m.msg));
+      (history || []).forEach((m) => appendChatBubble(m.from, m.msg, m.avatar));
     });
   }
 
