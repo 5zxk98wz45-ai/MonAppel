@@ -81,6 +81,9 @@
   #leave-call-btn { background: #da373c; color: white; }
 
   #main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  #main-header { padding: 12px 14px; border-bottom: 1px solid #1e1f22; font-weight: 700; font-size: 15px; display: flex; align-items: center; justify-content: space-between; flex-shrink: 0; }
+  #main-header .dm-call-btn { background: #23a55a; color: white; border: none; border-radius: 6px; padding: 6px 10px; font-size: 13px; cursor: pointer; }
+  #server-code-tag { font-size: 11px; color: #949ba4; font-weight: 400; cursor: pointer; }
   #no-channel { flex: 1; display: flex; align-items: center; justify-content: center; color: #6b6e76; padding: 20px; text-align: center; }
   #chat-messages { flex: 1; overflow-y: auto; padding: 14px; }
   .msg { margin-bottom: 10px; display: flex; gap: 8px; }
@@ -170,7 +173,11 @@
     </div>
 
     <div id="main">
-      <div id="no-channel">Sélectionne ou crée un serveur, puis un salon, pour discuter.</div>
+      <div id="main-header" class="hidden">
+        <span id="main-header-label"></span>
+        <button class="dm-call-btn hidden" id="dm-call-btn">📞 Appeler</button>
+      </div>
+      <div id="no-channel">Sélectionne ou crée un serveur, puis un salon, pour discuter — ou clique sur un ami pour lui écrire en privé.</div>
       <div id="chat-messages" class="hidden"></div>
       <form id="chat-form" class="hidden">
         <input id="chat-input" placeholder="Écris un message..." autocomplete="off">
@@ -215,6 +222,9 @@
   const myAccountName = document.getElementById('my-account-name');
 
   const noChannelEl = document.getElementById('no-channel');
+  const mainHeader = document.getElementById('main-header');
+  const mainHeaderLabel = document.getElementById('main-header-label');
+  const dmCallBtn = document.getElementById('dm-call-btn');
   const chatMessages = document.getElementById('chat-messages');
   const chatForm = document.getElementById('chat-form');
   const chatInput = document.getElementById('chat-input');
@@ -231,6 +241,8 @@
   let allServers = [];
   let currentServerId = null;
   let currentChannelId = null;
+  let activeContext = null; // { type: 'channel'|'dm', id }
+  let currentDMPartner = null;
   let inCall = false;
   let localStream = null;
   const peerConnections = {};       // appel de groupe (mesh) : socketId -> RTCPeerConnection
@@ -478,10 +490,36 @@
     addDiv.title = 'Créer un serveur';
     addDiv.onclick = () => promptModal('Créer un serveur', 'Nom du serveur', (name) => {
       socket.emit('create-server', name, (res) => {
-        if (res.ok) selectServer(res.id);
+        if (res.ok) {
+          selectServer(res.id);
+          modalRoot.innerHTML = `
+            <div class="modal-backdrop">
+              <div class="modal-box">
+                <h3>Serveur créé !</h3>
+                <p style="font-size:13px;color:#949ba4;">Partage ce code pour inviter du monde :</p>
+                <div style="font-size:22px;font-weight:700;letter-spacing:3px;text-align:center;background:#1e1f22;padding:12px;border-radius:8px;margin-bottom:10px;">${res.code}</div>
+                <button class="modal-confirm" style="width:100%;" id="close-code-modal">OK</button>
+              </div>
+            </div>`;
+          document.getElementById('close-code-modal').onclick = () => modalRoot.innerHTML = '';
+        }
       });
     });
     serverRail.appendChild(addDiv);
+
+    const joinDiv = document.createElement('div');
+    joinDiv.className = 'add-icon';
+    joinDiv.style.background = '#5865f2';
+    joinDiv.textContent = '🔑';
+    joinDiv.style.fontSize = '16px';
+    joinDiv.title = 'Rejoindre avec un code';
+    joinDiv.onclick = () => promptModal('Rejoindre un serveur', 'Code d\'invitation', (code) => {
+      socket.emit('join-server-by-code', code, (res) => {
+        if (res.ok) selectServer(res.id);
+        else showMessage(res.error, 'error-msg');
+      });
+    });
+    serverRail.appendChild(joinDiv);
 
     // Rafraîchit la vue du salon courant si son serveur a changé (ex: nouveau salon ajouté)
     if (currentServerId) renderChannelList();
@@ -491,11 +529,26 @@
     currentServerId = serverId;
     currentChannelId = null;
     const s = allServers.find((x) => x.id === serverId);
-    serverTitle.textContent = s ? s.name : '';
+    serverTitle.innerHTML = '';
+    if (s) {
+      serverTitle.appendChild(document.createTextNode(s.name + ' '));
+      const codeTag = document.createElement('span');
+      codeTag.id = 'server-code-tag';
+      codeTag.textContent = `[code: ${s.code}]`;
+      codeTag.title = 'Cliquer pour copier le code';
+      codeTag.onclick = () => { navigator.clipboard?.writeText(s.code); showMessage('Code copié : ' + s.code, 'system-msg'); };
+      serverTitle.appendChild(codeTag);
+    }
     renderChannelList();
     showNoChannel();
     document.querySelectorAll('.server-icon').forEach((el, i) => el.classList.toggle('active', allServers[i]?.id === serverId));
   }
+
+  socket.on('channel-added', ({ serverId, channel }) => {
+    const s = allServers.find((x) => x.id === serverId);
+    if (s && !s.channels.some((c) => c.id === channel.id)) s.channels.push(channel);
+    if (currentServerId === serverId) renderChannelList();
+  });
 
   function renderChannelList() {
     const s = allServers.find((x) => x.id === currentServerId);
@@ -521,11 +574,18 @@
 
   function joinChannel(serverId, channelId) {
     if (inCall) leaveCall();
+    if (directPC) endDirectCall();
+    currentDMPartner = null;
     socket.emit('join-channel', { serverId, channelId });
   }
 
   socket.on('channel-joined', ({ serverId, channelId }) => {
     currentServerId = serverId; currentChannelId = channelId;
+    activeContext = { type: 'channel', id: channelId };
+    const s = allServers.find((x) => x.id === serverId);
+    const ch = s?.channels.find((c) => c.id === channelId);
+    mainHeaderLabel.textContent = '# ' + (ch ? ch.name : '');
+    dmCallBtn.classList.add('hidden');
     renderChannelList();
     chatMessages.innerHTML = '';
     showChannelUI();
@@ -533,6 +593,7 @@
 
   function showNoChannel() {
     noChannelEl.classList.remove('hidden');
+    mainHeader.classList.add('hidden');
     chatMessages.classList.add('hidden');
     chatForm.classList.add('hidden');
     joinCallBtn.classList.add('hidden');
@@ -540,6 +601,7 @@
   }
   function showChannelUI() {
     noChannelEl.classList.add('hidden');
+    mainHeader.classList.remove('hidden');
     chatMessages.classList.remove('hidden');
     chatForm.classList.remove('hidden');
     if (!inCall) joinCallBtn.classList.remove('hidden');
@@ -555,15 +617,8 @@
     });
   });
 
-  // --- Chat ---
-  chatForm.onsubmit = (e) => {
-    e.preventDefault();
-    const msg = chatInput.value.trim();
-    if (!msg) return;
-    socket.emit('chat-message', msg);
-    chatInput.value = '';
-  };
-  socket.on('chat-message', ({ pseudo, msg }) => {
+  // --- Chat (salon ou DM selon activeContext) ---
+  function appendChatBubble(pseudo, msg) {
     const div = document.createElement('div');
     div.className = 'msg';
     div.appendChild(avatarEl(pseudo));
@@ -575,7 +630,52 @@
     div.appendChild(content);
     chatMessages.appendChild(div);
     chatMessages.scrollTop = chatMessages.scrollHeight;
+  }
+
+  chatForm.onsubmit = (e) => {
+    e.preventDefault();
+    const msg = chatInput.value.trim();
+    if (!msg || !activeContext) return;
+    if (activeContext.type === 'channel') {
+      socket.emit('chat-message', msg);
+    } else if (activeContext.type === 'dm') {
+      appendChatBubble(myPseudo, msg);
+      socket.emit('send-dm', { toPseudo: activeContext.id, msg }, (res) => {
+        if (!res.ok) showMessage(res.error || 'Message non envoyé.', 'error-msg');
+      });
+    }
+    chatInput.value = '';
+  };
+  socket.on('chat-message', ({ pseudo, msg }) => appendChatBubble(pseudo, msg));
+
+  socket.on('dm-message', ({ from, msg }) => {
+    if (activeContext && activeContext.type === 'dm' && activeContext.id === from) {
+      appendChatBubble(from, msg);
+    } else {
+      showMessage(`Nouveau message de ${from}.`, 'system-msg');
+    }
   });
+
+  // --- Ouvrir une discussion privée avec un ami ---
+  function openDM(pseudo) {
+    if (inCall) leaveCall();
+    currentServerId = null; currentChannelId = null;
+    currentDMPartner = pseudo;
+    activeContext = { type: 'dm', id: pseudo };
+    mainHeaderLabel.textContent = '@ ' + pseudo;
+    dmCallBtn.classList.remove('hidden');
+    joinCallBtn.classList.add('hidden');
+    leaveCallBtn.classList.add('hidden');
+    document.querySelectorAll('.server-icon').forEach((el) => el.classList.remove('active'));
+    chatMessages.innerHTML = '';
+    showChannelUI();
+    joinCallBtn.classList.add('hidden');
+    socket.emit('get-dm-history', pseudo, (history) => {
+      (history || []).forEach((m) => appendChatBubble(m.from, m.msg));
+    });
+  }
+
+  dmCallBtn.onclick = () => { if (currentDMPartner) startDirectCall(currentDMPartner); };
 
   // --- Amis (via le serveur, avec demandes à accepter/refuser) ---
   addContactBtn.onclick = () => {
@@ -614,7 +714,16 @@
           const dot = document.createElement('span');
           dot.className = 'dot ' + (isOnline ? 'online' : 'offline');
           li.appendChild(dot);
-          li.onclick = () => { if (isOnline) startDirectCall(pseudo); else showMessage(`${pseudo} n'est pas en ligne.`, 'system-msg'); };
+          li.style.cursor = 'pointer';
+          li.onclick = () => openDM(pseudo);
+          if (isOnline) {
+            const callBtn = document.createElement('button');
+            callBtn.textContent = '📞';
+            callBtn.title = 'Appeler';
+            callBtn.style.cssText = 'background:none;border:none;cursor:pointer;font-size:13px;padding:0 2px;';
+            callBtn.onclick = (e) => { e.stopPropagation(); startDirectCall(pseudo); };
+            li.appendChild(callBtn);
+          }
         }
         contactListEl.appendChild(li);
       });
