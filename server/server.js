@@ -15,6 +15,7 @@ app.use(express.static(path.join(__dirname, '..')));
 const USERS_FILE = path.join(__dirname, 'users.json');
 const SERVERS_FILE = path.join(__dirname, 'servers.json');
 const FRIENDS_FILE = path.join(__dirname, 'friends.json');
+const DMS_FILE = path.join(__dirname, 'dms.json');
 
 function loadJSON(file, fallback) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
@@ -24,12 +25,23 @@ function saveJSON(file, data) {
 }
 function hashPassword(pw) { return crypto.createHash('sha256').update(pw).digest('hex'); }
 function shortId() { return crypto.randomBytes(4).toString('hex'); }
+function genInviteCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // sans caractères ambigus
+  let code;
+  do {
+    code = Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+  } while (Object.values(servers).some((s) => s.code === code));
+  return code;
+}
+function dmKey(a, b) { return [a, b].sort().join('|'); }
 
 let users = loadJSON(USERS_FILE, {});
-// servers = { serverId: { name, channels: { channelId: { name } } } }
+// servers = { serverId: { name, code, members: [pseudo...], channels: { channelId: { name } } } }
 let servers = loadJSON(SERVERS_FILE, {});
 // friendsData = { pseudo: { friends: [...], incoming: [...], outgoing: [...] } }
 let friendsData = loadJSON(FRIENDS_FILE, {});
+// dmsData = { "pseudoA|pseudoB": [ { from, msg, ts }, ... ] }
+let dmsData = loadJSON(DMS_FILE, {});
 
 function ensureFriendData(pseudo) {
   if (!friendsData[pseudo]) friendsData[pseudo] = { friends: [], incoming: [], outgoing: [] };
@@ -51,11 +63,13 @@ function usersInRoom(serverId, channelId) {
     .map((u) => u.pseudo);
 }
 
-function serversPublicList() {
-  return Object.entries(servers).map(([id, s]) => ({
-    id, name: s.name,
-    channels: Object.entries(s.channels).map(([cid, c]) => ({ id: cid, name: c.name }))
-  }));
+function serversForUser(pseudo) {
+  return Object.entries(servers)
+    .filter(([id, s]) => (s.members || []).includes(pseudo))
+    .map(([id, s]) => ({
+      id, name: s.name, code: s.code,
+      channels: Object.entries(s.channels).map(([cid, c]) => ({ id: cid, name: c.name }))
+    }));
 }
 
 io.on('connection', (socket) => {
@@ -82,7 +96,11 @@ io.on('connection', (socket) => {
     connected[socket.id] = { pseudo, serverId: null, channelId: null };
     pseudoToSocket[pseudo] = socket.id;
     ensureFriendData(pseudo);
-    socket.emit('servers-list', serversPublicList());
+    // rejoint les "rooms" de mise à jour temps réel de chaque serveur dont il est membre
+    Object.entries(servers).forEach(([id, s]) => {
+      if ((s.members || []).includes(pseudo)) socket.join(`server:${id}`);
+    });
+    socket.emit('servers-list', serversForUser(pseudo));
     socket.emit('friends-data', friendsData[pseudo]);
     socket.emit('profile', { avatar: users[pseudo]?.avatar || null });
   });
@@ -146,17 +164,38 @@ io.on('connection', (socket) => {
     saveJSON(FRIENDS_FILE, friendsData);
   });
 
-  // --- Créer un serveur ---
+  // --- Créer un serveur (génère un code d'invitation) ---
   socket.on('create-server', (name, cb) => {
+    const u = connected[socket.id];
+    if (!u) return cb({ ok: false, error: 'Non connecté.' });
     if (!name || !name.trim()) return cb({ ok: false, error: 'Nom invalide.' });
     const id = shortId();
-    servers[id] = { name: name.trim(), channels: {} };
+    const code = genInviteCode();
+    servers[id] = { name: name.trim(), code, members: [u.pseudo], channels: {} };
     saveJSON(SERVERS_FILE, servers);
-    io.emit('servers-list', serversPublicList());
+    socket.join(`server:${id}`);
+    socket.emit('servers-list', serversForUser(u.pseudo));
+    cb({ ok: true, id, code });
+  });
+
+  // --- Rejoindre un serveur avec un code d'invitation ---
+  socket.on('join-server-by-code', (code, cb) => {
+    const u = connected[socket.id];
+    if (!u) return cb({ ok: false, error: 'Non connecté.' });
+    const entry = Object.entries(servers).find(([id, s]) => s.code === (code || '').trim().toUpperCase());
+    if (!entry) return cb({ ok: false, error: 'Code invalide.' });
+    const [id, s] = entry;
+    if (!s.members.includes(u.pseudo)) {
+      s.members.push(u.pseudo);
+      saveJSON(SERVERS_FILE, servers);
+    }
+    socket.join(`server:${id}`);
+    socket.to(`server:${id}`).emit('system-message-server', { serverId: id, text: `${u.pseudo} a rejoint le serveur.` });
+    socket.emit('servers-list', serversForUser(u.pseudo));
     cb({ ok: true, id });
   });
 
-  // --- Créer un salon dans un serveur ---
+  // --- Créer un salon dans un serveur (notifie tous les membres en temps réel) ---
   socket.on('create-channel', ({ serverId, name }, cb) => {
     const s = servers[serverId];
     if (!s) return cb({ ok: false, error: 'Serveur introuvable.' });
@@ -164,7 +203,7 @@ io.on('connection', (socket) => {
     const id = shortId();
     s.channels[id] = { name: name.trim() };
     saveJSON(SERVERS_FILE, servers);
-    io.emit('servers-list', serversPublicList());
+    io.to(`server:${serverId}`).emit('channel-added', { serverId, channel: { id, name: s.channels[id].name } });
     cb({ ok: true, id });
   });
 
@@ -225,6 +264,30 @@ io.on('connection', (socket) => {
       socket.to(key).emit('call-peer-left', { id: socket.id });
     }
   }
+
+  // --- Messages privés (DM) entre amis ---
+  socket.on('send-dm', ({ toPseudo, msg }, cb) => {
+    const u = connected[socket.id];
+    if (!u) return cb && cb({ ok: false });
+    ensureFriendData(u.pseudo);
+    if (!friendsData[u.pseudo].friends.includes(toPseudo)) return cb && cb({ ok: false, error: "Vous n'êtes pas amis." });
+    const key = dmKey(u.pseudo, toPseudo);
+    if (!dmsData[key]) dmsData[key] = [];
+    const entry = { from: u.pseudo, msg, ts: Date.now() };
+    dmsData[key].push(entry);
+    if (dmsData[key].length > 200) dmsData[key] = dmsData[key].slice(-200);
+    saveJSON(DMS_FILE, dmsData);
+    const targetId = pseudoToSocket[toPseudo];
+    if (targetId) io.to(targetId).emit('dm-message', entry);
+    cb && cb({ ok: true });
+  });
+
+  socket.on('get-dm-history', (withPseudo, cb) => {
+    const u = connected[socket.id];
+    if (!u) return cb([]);
+    const key = dmKey(u.pseudo, withPseudo);
+    cb(dmsData[key] || []);
+  });
 
   // --- Appel direct à un contact (par pseudo), indépendant des salons ---
   socket.on('direct-call-user', ({ toPseudo, offer }, cb) => {
