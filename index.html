@@ -354,7 +354,7 @@
         return;
       }
       myPseudo = pseudo;
-      localStorage.setItem('mondiscord-session', JSON.stringify({ pseudo, password }));
+      localStorage.setItem('monappel-session', JSON.stringify({ pseudo, password }));
       authScreen.classList.add('hidden');
       app.classList.remove('hidden');
       myAccountName.textContent = myPseudo;
@@ -366,7 +366,7 @@
   // --- Reconnexion automatique si une session est enregistrée sur cet appareil ---
   function tryAutoLogin() {
     let saved;
-    try { saved = JSON.parse(localStorage.getItem('mondiscord-session') || 'null'); } catch { saved = null; }
+    try { saved = JSON.parse(localStorage.getItem('monappel-session') || 'null'); } catch { saved = null; }
     if (!saved || !saved.pseudo || !saved.password) return;
     authScreen.classList.add('hidden'); // évite le flash de l'écran de connexion
     socket.emit('login', saved, (res) => {
@@ -376,7 +376,7 @@
         myAccountName.textContent = myPseudo;
         socket.emit('join', myPseudo);
       } else {
-        localStorage.removeItem('mondiscord-session');
+        localStorage.removeItem('monappel-session');
         authScreen.classList.remove('hidden');
       }
     });
@@ -481,7 +481,7 @@
     };
     document.getElementById('profile-close').onclick = () => modalRoot.innerHTML = '';
     document.getElementById('logout-btn').onclick = () => {
-      localStorage.removeItem('mondiscord-session');
+      localStorage.removeItem('monappel-session');
       location.reload();
     };
     document.getElementById('profile-save').onclick = () => {
