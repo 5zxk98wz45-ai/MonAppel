@@ -1,7 +1,7 @@
 {
-  "name": "discord-clone-server",
+  "name": "monappel-server",
   "version": "1.0.0",
-  "description": "Backend chat + comptes + amis + avatars fiables dans les messages + serveurs privés + DM + appels",
+  "description": "Backend MonAppel : comptes, amis, avatars, serveurs privés (code), DM, appels",
   "main": "server.js",
   "scripts": { "start": "node server.js" },
   "dependencies": { "express": "^4.19.2", "socket.io": "^4.7.5" }
