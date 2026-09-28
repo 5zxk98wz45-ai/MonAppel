@@ -4,6 +4,14 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>MonAppel</title>
+<meta name="theme-color" content="#10151f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="MonAppel">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" type="image/png" href="icon-192.png">
 <style>
   * { box-sizing: border-box; font-family: 'Segoe UI', -apple-system, system-ui, sans-serif; }
   html, body { margin: 0; height: 100%; background: #10151f; color: #e4e6ec; overflow: hidden; }
@@ -82,10 +90,20 @@
   #chat-input { flex: 1; padding: 12px 16px; border-radius: 14px; border: 1px solid #2a3550; background: #1a2233; color: white; font-size: 16px; min-width: 0; }
   #chat-form button { padding: 10px 18px; border: none; border-radius: 14px; background: linear-gradient(90deg,#22d3ee,#818cf8); color: #0b0f18; cursor: pointer; font-weight: 700; }
 
-  #call-panel { position: fixed; top: 8px; right: 8px; left: 8px; max-width: 420px; margin-left: auto; background: #0b0f18; padding: 12px; border-radius: 18px; z-index: 10; box-shadow: 0 10px 30px rgba(0,0,0,.6); border: 1px solid #2a3550; }
-  #videos-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 6px; margin-bottom: 8px; }
+  #call-panel { position: fixed; top: 8px; right: 8px; left: 8px; max-width: 420px; margin-left: auto; background: #0b0f18; padding: 12px; border-radius: 18px; z-index: 40; box-shadow: 0 10px 30px rgba(0,0,0,.6); border: 1px solid #2a3550; display: flex; flex-direction: column; }
+  #call-panel.full { top: 0; right: 0; bottom: 0; left: 0; max-width: none; margin: 0; border-radius: 0; border: none; }
+  #call-panel.minimized { left: -10000px; right: auto; top: 0; width: 320px; opacity: 0; pointer-events: none; }
+  #videos-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 6px; margin-bottom: 10px; }
   #videos-grid video { width: 100%; border-radius: 12px; background: #000; display: block; aspect-ratio: 4/3; object-fit: cover; }
-  #call-panel > button { width: 100%; padding: 11px; border: none; border-radius: 12px; cursor: pointer; background: #ff5c73; color: white; font-weight: 700; }
+  #call-panel.full #videos-grid { flex: 1; min-height: 0; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); grid-auto-rows: 1fr; margin-bottom: 12px; }
+  #call-panel.full #videos-grid video { height: 100%; min-height: 0; aspect-ratio: auto; object-fit: contain; }
+  #call-controls { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+  #call-controls button { min-width: 46px; height: 46px; border: none; border-radius: 14px; cursor: pointer; font-size: 18px; background: #202a3f; color: white; display: flex; align-items: center; justify-content: center; }
+  #call-controls button.off { background: #ff5c73; }
+  #call-controls button.active { background: linear-gradient(90deg,#22d3ee,#818cf8); }
+  #call-controls #hangup-btn { background: #ff5c73; padding: 0 16px; font-size: 14px; font-weight: 700; }
+  #return-call-pill { position: fixed; top: 8px; left: 50%; transform: translateX(-50%); z-index: 45; background: linear-gradient(90deg,#34d399,#22d3ee); color: #0b0f18; border: none; border-radius: 999px; padding: 9px 16px; font-weight: 700; font-size: 13px; cursor: pointer; box-shadow: 0 6px 18px rgba(0,0,0,.5); }
+  #toast { position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%); background: #1a2233; border: 1px solid #2a3550; padding: 10px 16px; border-radius: 12px; z-index: 100; font-size: 13px; max-width: 90%; text-align: center; }
 
   /* --- Mon compte --- */
   #my-account { display: flex; align-items: center; gap: 8px; padding: 10px; border-top: 1px solid #232e45; cursor: pointer; }
@@ -190,8 +208,17 @@
 
   <div id="call-panel" class="hidden">
     <div id="videos-grid"></div>
-    <button id="hangup-btn">Raccrocher</button>
+    <div id="call-controls">
+      <button id="mic-btn" title="Couper / activer le micro">🎤</button>
+      <button id="cam-btn" title="Couper / activer la caméra">📷</button>
+      <button id="screen-btn" title="Partager l'écran">🖥️</button>
+      <button id="size-btn" title="Agrandir">⤢</button>
+      <button id="hide-btn" title="Masquer l'appel (il continue)">➖</button>
+      <button id="hangup-btn" title="Raccrocher">Raccrocher</button>
+    </div>
   </div>
+  <button id="return-call-pill" class="hidden">🎙️ Appel en cours · Retour</button>
+  <div id="toast" class="hidden"></div>
 
   <div id="modal-root"></div>
 
@@ -236,6 +263,12 @@
   const callPanel = document.getElementById('call-panel');
   const videosGrid = document.getElementById('videos-grid');
   const hangupBtn = document.getElementById('hangup-btn');
+  const micBtn = document.getElementById('mic-btn');
+  const camBtn = document.getElementById('cam-btn');
+  const screenBtn = document.getElementById('screen-btn');
+  const sizeBtn = document.getElementById('size-btn');
+  const hideBtn = document.getElementById('hide-btn');
+  const returnPill = document.getElementById('return-call-pill');
   const modalRoot = document.getElementById('modal-root');
 
   let mode = 'login';
@@ -601,8 +634,7 @@
   };
 
   function joinChannel(serverId, channelId) {
-    if (inCall) leaveCall();
-    if (directPC) endDirectCall();
+    if (inCall && callChannelKey !== `${serverId}:${channelId}`) leaveCall();
     currentDMPartner = null;
     socket.emit('join-channel', { serverId, channelId });
   }
@@ -617,6 +649,10 @@
     renderChannelList();
     chatMessages.innerHTML = '';
     showChannelUI();
+    if (inCall && callChannelKey === `${serverId}:${channelId}`) {
+      joinCallBtn.classList.add('hidden');
+      leaveCallBtn.classList.remove('hidden');
+    }
   });
 
   function showNoChannel() {
@@ -690,7 +726,6 @@
 
   // --- Ouvrir une discussion privée avec un ami ---
   function openDM(pseudo) {
-    if (inCall) leaveCall();
     currentServerId = null; currentChannelId = null;
     currentDMPartner = pseudo;
     activeContext = { type: 'dm', id: pseudo };
@@ -763,12 +798,134 @@
   }
   setInterval(() => { if (myPseudo && myFriendsData.friends.length) renderFriends(); }, 8000);
 
-  // --- Appel de groupe (mesh) ---
+  // ============================================================
+  //  APPELS : interface (petit / grand / masqué), micro, caméra, partage d'écran
+  // ============================================================
+  const toastEl = document.getElementById('toast');
+  let toastTimer = null;
+  function toast(text) {
+    toastEl.textContent = text;
+    toastEl.classList.remove('hidden');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastEl.classList.add('hidden'), 3800);
+  }
+
+  let callViewMode = 'mini';      // 'mini' | 'full' | 'minimized'
+  let lastVisibleMode = 'mini';
+  let screenStream = null;
+  let callChannelKey = null;      // salon dans lequel on est en appel de groupe
+  let pendingDirectCandidates = [];  // candidats ICE en attente (appelant, avant de connaître l'autre)
+  let earlyDirectCandidates = [];    // candidats ICE reçus avant d'avoir accepté l'appel
+
+  function isCallActive() { return inCall || !!directPC; }
+  function getActiveLocalStream() { return localStream || directLocalStream; }
+
+  function updateCallUI() {
+    if (!isCallActive()) {
+      callPanel.classList.add('hidden');
+      callPanel.classList.remove('full', 'minimized');
+      returnPill.classList.add('hidden');
+      return;
+    }
+    callPanel.classList.remove('hidden');
+    callPanel.classList.toggle('full', callViewMode === 'full');
+    callPanel.classList.toggle('minimized', callViewMode === 'minimized');
+    returnPill.classList.toggle('hidden', callViewMode !== 'minimized');
+    sizeBtn.textContent = callViewMode === 'full' ? '⤡' : '⤢';
+    sizeBtn.title = callViewMode === 'full' ? 'Réduire' : 'Agrandir';
+  }
+
+  function resetCallControls() {
+    callViewMode = 'mini';
+    lastVisibleMode = 'mini';
+    micBtn.classList.remove('off'); micBtn.textContent = '🎤';
+    camBtn.classList.remove('off'); camBtn.textContent = '📷';
+    screenBtn.classList.remove('active');
+  }
+
+  function cleanupCallControls() {
+    if (screenStream) { screenStream.getTracks().forEach((t) => { t.onended = null; t.stop(); }); screenStream = null; }
+    resetCallControls();
+    updateCallUI();
+  }
+
+  sizeBtn.onclick = () => { callViewMode = callViewMode === 'full' ? 'mini' : 'full'; updateCallUI(); };
+  hideBtn.onclick = () => {
+    if (callViewMode !== 'minimized') lastVisibleMode = callViewMode;
+    callViewMode = 'minimized';
+    updateCallUI();
+  };
+  returnPill.onclick = () => { callViewMode = lastVisibleMode; updateCallUI(); };
+
+  micBtn.onclick = () => {
+    const s = getActiveLocalStream(); if (!s) return;
+    const tracks = s.getAudioTracks(); if (!tracks.length) return;
+    const enable = !tracks[0].enabled;
+    tracks.forEach((t) => { t.enabled = enable; });
+    micBtn.classList.toggle('off', !enable);
+    micBtn.textContent = enable ? '🎤' : '🔇';
+  };
+
+  camBtn.onclick = () => {
+    const s = getActiveLocalStream(); if (!s) return;
+    const tracks = s.getVideoTracks();
+    if (!tracks.length) { toast("Pas de caméra disponible pour cet appel."); return; }
+    const enable = !tracks[0].enabled;
+    tracks.forEach((t) => { t.enabled = enable; });
+    camBtn.classList.toggle('off', !enable);
+    camBtn.textContent = enable ? '📷' : '🚫';
+  };
+
+  // --- Partage d'écran ---
+  function setOutgoingVideoTrack(track) {
+    const pcs = Object.values(peerConnections);
+    if (directPC) pcs.push(directPC);
+    pcs.forEach((pc) => {
+      const tr = pc.getTransceivers().find((t) => t.receiver && t.receiver.track && t.receiver.track.kind === 'video');
+      if (tr && tr.sender) tr.sender.replaceTrack(track).catch(() => {});
+    });
+  }
+  function applyScreenToPC(pc) {
+    if (!screenStream) return;
+    const tr = pc.getTransceivers().find((t) => t.receiver && t.receiver.track && t.receiver.track.kind === 'video');
+    if (tr && tr.sender) tr.sender.replaceTrack(screenStream.getVideoTracks()[0]).catch(() => {});
+  }
+  async function startScreenShare() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+      toast("Le partage d'écran n'est pas disponible sur ce téléphone/navigateur (iPhone notamment). Essaie depuis un ordinateur.");
+      return;
+    }
+    try { screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true }); }
+    catch { screenStream = null; return; }
+    const track = screenStream.getVideoTracks()[0];
+    setOutgoingVideoTrack(track);
+    const tile = document.getElementById('video-local');
+    if (tile) tile.srcObject = screenStream;
+    track.onended = () => stopScreenShare();
+    screenBtn.classList.add('active');
+  }
+  function stopScreenShare() {
+    if (!screenStream) return;
+    const s = screenStream; screenStream = null;
+    s.getTracks().forEach((t) => { t.onended = null; t.stop(); });
+    const cam = getActiveLocalStream();
+    const camTrack = cam ? (cam.getVideoTracks()[0] || null) : null;
+    setOutgoingVideoTrack(camTrack);
+    const tile = document.getElementById('video-local');
+    if (tile && cam) tile.srcObject = cam;
+    screenBtn.classList.remove('active');
+  }
+  screenBtn.onclick = () => {
+    if (!isCallActive()) return;
+    if (screenStream) stopScreenShare(); else startScreenShare();
+  };
+
+  // --- Utilitaires WebRTC ---
   async function getLocalMedia() {
     try { return await navigator.mediaDevices.getUserMedia({ audio: true, video: true }); }
     catch {
-      try { showMessage('Caméra indisponible, audio seul.', 'error-msg'); return await navigator.mediaDevices.getUserMedia({ audio: true, video: false }); }
-      catch (e) { showMessage("Impossible d'accéder au micro/caméra.", 'error-msg'); throw e; }
+      try { toast('Caméra indisponible, appel en audio seul.'); return await navigator.mediaDevices.getUserMedia({ audio: true, video: false }); }
+      catch (e) { toast("Impossible d'accéder au micro/caméra. Vérifie les autorisations."); throw e; }
     }
   }
   function addVideoTile(id, stream, isLocal) {
@@ -783,9 +940,28 @@
   }
   function removeVideoTile(id) { const v = document.getElementById('video-' + id); if (v) v.remove(); }
 
+  // Ajoute les pistes locales + une ligne vidéo "vide" si on est en audio seul (pour pouvoir partager l'écran ensuite)
+  function attachLocalTracks(pc, stream) {
+    stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+    if (stream.getVideoTracks().length === 0) pc.addTransceiver('video', { direction: 'sendrecv' });
+    applyScreenToPC(pc);
+  }
+  // Les candidats ICE reçus trop tôt (avant la description distante) sont mis en file d'attente
+  async function addCandidateSafe(pc, candidate) {
+    if (pc.remoteDescription) { try { await pc.addIceCandidate(candidate); } catch {} }
+    else { (pc._queued = pc._queued || []).push(candidate); }
+  }
+  async function flushCandidates(pc) {
+    const q = pc._queued || []; pc._queued = [];
+    for (const c of q) { try { await pc.addIceCandidate(c); } catch {} }
+  }
+
+  // ============================================================
+  //  Appel de groupe (mesh) dans un salon
+  // ============================================================
   function createPeerConnection(remoteId) {
     const pc = new RTCPeerConnection(rtcConfig);
-    localStream.getTracks().forEach((t) => pc.addTrack(t, localStream));
+    attachLocalTracks(pc, localStream);
     pc.ontrack = (e) => addVideoTile(remoteId, e.streams[0], false);
     pc.onicecandidate = (e) => { if (e.candidate) socket.emit('ice-candidate', { to: remoteId, candidate: e.candidate }); };
     peerConnections[remoteId] = pc;
@@ -795,10 +971,12 @@
   joinCallBtn.onclick = async () => {
     try { localStream = await getLocalMedia(); } catch { return; }
     inCall = true;
-    callPanel.classList.remove('hidden');
+    callChannelKey = `${currentServerId}:${currentChannelId}`;
+    resetCallControls();
     joinCallBtn.classList.add('hidden');
     leaveCallBtn.classList.remove('hidden');
     addVideoTile('local', localStream, true);
+    updateCallUI();
     socket.emit('join-call');
   };
 
@@ -814,13 +992,23 @@
     if (!inCall) return;
     const pc = createPeerConnection(from);
     await pc.setRemoteDescription(offer);
+    await flushCandidates(pc);
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     socket.emit('call-answer', { to: from, answer });
   });
-  socket.on('call-answer', async ({ from, answer }) => { const pc = peerConnections[from]; if (pc) await pc.setRemoteDescription(answer); });
-  socket.on('ice-candidate', async ({ from, candidate }) => { const pc = peerConnections[from]; if (pc) { try { await pc.addIceCandidate(candidate); } catch {} } });
-  socket.on('call-peer-left', ({ id }) => { if (peerConnections[id]) { peerConnections[id].close(); delete peerConnections[id]; } removeVideoTile(id); });
+  socket.on('call-answer', async ({ from, answer }) => {
+    const pc = peerConnections[from];
+    if (pc) { await pc.setRemoteDescription(answer); await flushCandidates(pc); }
+  });
+  socket.on('ice-candidate', async ({ from, candidate }) => {
+    const pc = peerConnections[from];
+    if (pc) await addCandidateSafe(pc, candidate);
+  });
+  socket.on('call-peer-left', ({ id }) => {
+    if (peerConnections[id]) { peerConnections[id].close(); delete peerConnections[id]; }
+    removeVideoTile(id);
+  });
 
   function leaveCall() {
     socket.emit('leave-call');
@@ -829,40 +1017,52 @@
     videosGrid.innerHTML = '';
     if (localStream) { localStream.getTracks().forEach((t) => t.stop()); localStream = null; }
     inCall = false;
-    callPanel.classList.add('hidden');
+    callChannelKey = null;
     if (currentChannelId) joinCallBtn.classList.remove('hidden');
     leaveCallBtn.classList.add('hidden');
+    cleanupCallControls();
   }
   leaveCallBtn.onclick = leaveCall;
-  hangupBtn.onclick = () => { if (inCall) leaveCall(); if (directPC) endDirectCall(); };
 
-  // --- Appel direct 1-à-1 avec un contact ---
+  // ============================================================
+  //  Appel privé 1-à-1 avec un ami
+  // ============================================================
   async function startDirectCall(targetPseudo) {
-    if (directPC || inCall) { showMessage('Un appel est déjà en cours.', 'error-msg'); return; }
+    if (directPC || inCall) { toast('Un appel est déjà en cours.'); return; }
     try { directLocalStream = await getLocalMedia(); } catch { return; }
-    callPanel.classList.remove('hidden');
+    resetCallControls();
     addVideoTile('local', directLocalStream, true);
+    pendingDirectCandidates = [];
+    directPartnerId = null;
 
     directPC = new RTCPeerConnection(rtcConfig);
-    directLocalStream.getTracks().forEach((t) => directPC.addTrack(t, directLocalStream));
+    attachLocalTracks(directPC, directLocalStream);
     directPC.ontrack = (e) => addVideoTile('remote', e.streams[0], false);
-    directPC.onicecandidate = (e) => { if (e.candidate) socket.emit('direct-ice-candidate', { to: directPartnerId, candidate: e.candidate }); };
+    directPC.onicecandidate = (e) => {
+      if (!e.candidate) return;
+      if (directPartnerId) socket.emit('direct-ice-candidate', { to: directPartnerId, candidate: e.candidate });
+      else pendingDirectCandidates.push(e.candidate);
+    };
+    updateCallUI();
 
     const offer = await directPC.createOffer();
     await directPC.setLocalDescription(offer);
     socket.emit('direct-call-user', { toPseudo: targetPseudo, offer }, (res) => {
       if (!res || !res.ok) {
-        showMessage(`${targetPseudo} n'est plus en ligne.`, 'error-msg');
+        toast(`${targetPseudo} n'est plus en ligne.`);
         endDirectCall();
         return;
       }
       directPartnerId = res.targetId;
+      pendingDirectCandidates.forEach((c) => socket.emit('direct-ice-candidate', { to: directPartnerId, candidate: c }));
+      pendingDirectCandidates = [];
     });
   }
 
   socket.on('direct-incoming-call', ({ from, offer, pseudo }) => {
     if (directPC || inCall) { socket.emit('direct-end-call', { to: from }); return; }
     pendingDirectOffer = { from, offer };
+    earlyDirectCandidates = [];
     modalRoot.innerHTML = `
       <div class="modal-backdrop">
         <div class="modal-box">
@@ -873,38 +1073,66 @@
           </div>
         </div>
       </div>`;
-    document.getElementById('reject-direct').onclick = () => { modalRoot.innerHTML = ''; socket.emit('direct-end-call', { to: from }); pendingDirectOffer = null; };
+    document.getElementById('reject-direct').onclick = () => {
+      modalRoot.innerHTML = '';
+      socket.emit('direct-end-call', { to: from });
+      pendingDirectOffer = null; earlyDirectCandidates = [];
+    };
     document.getElementById('accept-direct').onclick = async () => {
       modalRoot.innerHTML = '';
+      if (!pendingDirectOffer) return;
+      const remoteOffer = pendingDirectOffer.offer;
       directPartnerId = from;
-      try { directLocalStream = await getLocalMedia(); } catch { pendingDirectOffer = null; return; }
-      callPanel.classList.remove('hidden');
+      try { directLocalStream = await getLocalMedia(); }
+      catch { pendingDirectOffer = null; earlyDirectCandidates = []; directPartnerId = null; socket.emit('direct-end-call', { to: from }); return; }
+      resetCallControls();
       addVideoTile('local', directLocalStream, true);
 
       directPC = new RTCPeerConnection(rtcConfig);
-      directLocalStream.getTracks().forEach((t) => directPC.addTrack(t, directLocalStream));
+      attachLocalTracks(directPC, directLocalStream);
       directPC.ontrack = (e) => addVideoTile('remote', e.streams[0], false);
       directPC.onicecandidate = (e) => { if (e.candidate) socket.emit('direct-ice-candidate', { to: from, candidate: e.candidate }); };
+      updateCallUI();
 
-      await directPC.setRemoteDescription(pendingDirectOffer.offer);
+      await directPC.setRemoteDescription(remoteOffer);
+      for (const c of earlyDirectCandidates) { try { await directPC.addIceCandidate(c); } catch {} }
+      earlyDirectCandidates = [];
       const answer = await directPC.createAnswer();
       await directPC.setLocalDescription(answer);
       socket.emit('direct-answer-call', { to: from, answer });
       pendingDirectOffer = null;
     };
   });
-  socket.on('direct-call-answered', async ({ from, answer }) => { if (directPC) await directPC.setRemoteDescription(answer); });
-  socket.on('direct-ice-candidate', async ({ candidate }) => { if (directPC) { try { await directPC.addIceCandidate(candidate); } catch {} } });
-  socket.on('direct-call-ended', () => endDirectCall());
+  socket.on('direct-call-answered', async ({ answer }) => {
+    if (directPC) { await directPC.setRemoteDescription(answer); await flushCandidates(directPC); }
+  });
+  socket.on('direct-ice-candidate', async ({ candidate }) => {
+    if (directPC) await addCandidateSafe(directPC, candidate);
+    else if (pendingDirectOffer) earlyDirectCandidates.push(candidate);
+  });
+  socket.on('direct-call-ended', () => {
+    // Si l'appel entrant n'avait pas encore été décroché, on ferme la fenêtre "Appel entrant"
+    if (pendingDirectOffer) { modalRoot.innerHTML = ''; pendingDirectOffer = null; earlyDirectCandidates = []; }
+    endDirectCall();
+  });
 
   function endDirectCall() {
     if (directPC) { directPC.close(); directPC = null; }
     if (directLocalStream) { directLocalStream.getTracks().forEach((t) => t.stop()); directLocalStream = null; }
     removeVideoTile('remote');
-    if (!inCall) { removeVideoTile('local'); callPanel.classList.add('hidden'); }
+    if (!inCall) removeVideoTile('local');
     directPartnerId = null;
+    pendingDirectCandidates = [];
+    cleanupCallControls();
   }
-  hangupBtn.addEventListener('click', () => { if (directPartnerId) socket.emit('direct-end-call', { to: directPartnerId }); });
+
+  // --- Raccrocher (prévient l'autre personne AVANT de couper) ---
+  function hangUp() {
+    if (directPartnerId) socket.emit('direct-end-call', { to: directPartnerId });
+    if (inCall) leaveCall();
+    if (directPC) endDirectCall();
+  }
+  hangupBtn.onclick = hangUp;
 </script>
 </body>
 </html>
