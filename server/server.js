@@ -212,6 +212,13 @@ io.on('connection', (socket) => {
     const u = connected[socket.id];
     if (!u || !servers[serverId] || !servers[serverId].channels[channelId]) return;
 
+    // Même salon : on ne touche pas à l'appel de groupe en cours
+    if (u.serverId === serverId && u.channelId === channelId) {
+      socket.emit('channel-joined', { serverId, channelId });
+      socket.emit('user-list', usersInRoom(serverId, channelId));
+      return;
+    }
+
     // Quitte l'ancien salon
     if (u.serverId && u.channelId) {
       const oldKey = roomKey(u.serverId, u.channelId);
